@@ -221,12 +221,22 @@ export const joinBatchClass = async (req, res) => {
   try {
     const { batchId } = req.body;
     const userId = req.user.id || req.user.user_id;
+    console.log(`[Dyte] Join Request - BatchID: ${batchId}, UserID: ${userId}, Role: ${req.user.role}`);
+
+    if (!batchId) {
+      console.log("[Dyte] Error: Batch ID missing in request body");
+      return res.status(400).json({ success: false, message: "Batch ID is required" });
+    }
 
     const batch = await Batch.findById(batchId);
-    if (!batch) return res.status(404).json({ success: false, message: "Batch not found" });
+    if (!batch) {
+      console.log(`[Dyte] Error: Batch not found with ID ${batchId}`);
+      return res.status(404).json({ success: false, message: "Batch not found" });
+    }
 
     const validation = validateClassTime(batch);
     if (!validation.valid) {
+      console.log(`[Dyte] Validation Failed: ${validation.message}`);
       return res.status(400).json({ success: false, message: validation.message });
     }
 
