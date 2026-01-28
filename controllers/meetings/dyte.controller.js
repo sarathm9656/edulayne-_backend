@@ -250,7 +250,9 @@ export const joinBatchClass = async (req, res) => {
       return res.status(400).json({ success: false, message: "Dyte meeting not configured for this batch." });
     }
 
-    if (!isStartedRecently) {
+    // If Strict Schedule is ON, enforce that the class was started recently.
+    // If Strict Schedule is OFF, allow joining anytime as long as meeting ID exists.
+    if (batch.is_strict_schedule !== false && !isStartedRecently) {
       return res.status(400).json({ success: false, message: "Class has not been started by the instructor yet (or session expired)." });
     }
 
