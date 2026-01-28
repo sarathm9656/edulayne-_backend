@@ -231,7 +231,8 @@ export const joinBatchClass = async (req, res) => {
     const batch = await Batch.findById(batchId);
     if (!batch) {
       console.log(`[Dyte] Error: Batch not found with ID ${batchId}`);
-      return res.status(404).json({ success: false, message: "Batch not found" });
+      // Return 400 instead of 404 to distinguish from Route Not Found
+      return res.status(400).json({ success: false, message: `Batch with ID ${batchId} not found` });
     }
 
     const validation = validateClassTime(batch);
