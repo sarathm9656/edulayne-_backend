@@ -247,13 +247,21 @@ export const joinBatchClass = async (req, res) => {
     const isStartedRecently = lastStart && moment().diff(lastStart, 'hours') < 12;
 
     if (!batch.dyte_meeting_id || batch.meeting_platform !== 'Dyte') {
-      return res.status(400).json({ success: false, message: "Dyte meeting not configured for this batch." });
+      console.log(`[Dyte] Error: Meeting not configured. Platform: ${batch.meeting_platform}, ID: ${batch.dyte_meeting_id}`);
+      return res.status(400).json({
+        success: false,
+        message: "Meeting room not created yet. Please ask your instructor to click 'Start Class' at least once to initialize the room."
+      });
     }
 
     // If Strict Schedule is ON, enforce that the class was started recently.
     // If Strict Schedule is OFF, allow joining anytime as long as meeting ID exists.
     if (batch.is_strict_schedule !== false && !isStartedRecently) {
-      return res.status(400).json({ success: false, message: "Class has not been started by the instructor yet (or session expired)." });
+      console.log(`[Dyte] Join Denied. Strict: ${batch.is_strict_schedule}, LastStarted: ${batch.last_class_start_time}`);
+      return res.status(400).json({
+        success: false,
+        message: "The scheduled class time has expired or the instructor has not started the session yet. Please wait for the instructor."
+      });
     }
 
     // Add User as Participant
