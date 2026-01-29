@@ -19,6 +19,7 @@ export const createBatch = async (req, res) => {
       recurring_days,
       meeting_link,
       meeting_platform,
+      is_strict_schedule,
     } = req.body;
     const tenant_id = req.user.tenant_id;
 
@@ -109,6 +110,7 @@ export const createBatch = async (req, res) => {
       recurring_days: recurring_days || [],
       meeting_link,
       meeting_platform,
+      is_strict_schedule: is_strict_schedule !== undefined ? is_strict_schedule : true,
     });
 
     const savedBatch = await newBatch.save();
@@ -290,6 +292,10 @@ export const updateBatch = async (req, res) => {
 
     // Remove batch_id from update data if present
     delete updateData.batch_id;
+
+    // Sanitize ObjectId fields to prevent CastError
+    if (updateData.instructor_id === "") delete updateData.instructor_id;
+    if (updateData.course_id === "") delete updateData.course_id;
 
     // 1. Fetch existing batch to allow robust partial validation
     const existingBatch = await Batch.findOne({ _id: batch_id, tenant_id });

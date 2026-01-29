@@ -65,6 +65,27 @@ const liveSessionSchema = new mongoose.Schema({
         ref: 'Tenant',
         required: false
     },
+    instructor_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Login',
+        required: false
+    },
+
+    // Finance / Analytics Fields (Populated by Webhook)
+    actual_start_time: {
+        type: Date
+    },
+    actual_end_time: {
+        type: Date
+    },
+    duration_seconds: {
+        type: Number,
+        default: 0
+    },
+    duration_minutes: {
+        type: Number,
+        default: 0
+    },
 
 }, {
     timestamps: {

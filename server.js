@@ -3,7 +3,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import { fileURLToPath } from "url";
-import { dirname } from "path";
+import { dirname, join } from "path";
 import connectDB from "./config/database.js";
 import cookieParser from "cookie-parser";
 import indexRoutes from "./routes/index.routes.js";
@@ -48,7 +48,7 @@ app.use("/api/dyte", dyteRoutes);
 connectDB();
 
 // Uploads folder as static (General uploads)
-app.use("/api/uploads", express.static("uploads"));
+app.use("/api/uploads", express.static(join(__dirname, "uploads")));
 
 // Recordings folder as static (Configurable System Storage)
 // Use the path from .env or default to local uploads/recordings

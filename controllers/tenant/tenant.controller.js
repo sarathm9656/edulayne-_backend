@@ -204,14 +204,14 @@ export async function getStudentById(req, res) {
         enrolledCourses: enrolledCourses.map(e => ({
           purchase_id: e._id,
           purchased_at: e.purchased_at,
-          ...e.course_id.toObject()
+          ...(e.course_id?.toObject() || {})
         })),
         enrolledBatches: enrolledBatches.map(e => ({
           enrollment_id: e._id,
           joined_at: e.joined_at,
           status: e.status,
           progress: e.progress,
-          ...e.batch_id.toObject()
+          ...(e.batch_id?.toObject() || {})
         }))
       }
     });

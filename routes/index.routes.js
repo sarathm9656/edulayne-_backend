@@ -23,6 +23,7 @@ import batchStudentRoutes from "./batch/batchstudent.routes.js";
 import batchSubscriptionRoutes from "./batch/batchSubscription.routes.js";
 import payrollRoutes from "./tenant/payroll.routes.js";
 import attendanceRoutes from "./attendance.js";
+import financeRoutes from "./finance.routes.js";
 
 const router = express.Router();
 
@@ -72,5 +73,7 @@ router.use("/batch-subscription", batchSubscriptionRoutes);
 router.use("/payroll", payrollRoutes);
 
 router.use("/attendance", attendanceRoutes);
+
+router.use("/finance", financeRoutes);
 
 export default router;

@@ -8,6 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import Attendance from '../../models/Attendance.js';
+import LiveSession from '../../models/Live_Session.model.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +16,9 @@ const __dirname = path.dirname(__filename);
 const DYTE_API_URL = process.env.DYTE_API_BASE_URL || 'https://api.dyte.io/v2';
 const DYTE_ORG_ID = process.env.DYTE_ORG_ID;
 const DYTE_API_KEY = process.env.DYTE_API_KEY;
+
+// ✅ Windows Server / Office PC
+const BASE_FOLDER = "D:/Edulayne_Recordings";
 
 const getAuthHeaders = () => ({
   headers: {
@@ -136,6 +140,21 @@ const getUserName = async (userId) => {
   }
 }
 
+async function downloadVideo(url, filePath) {
+  const response = await axios({
+    method: "GET",
+    url,
+    responseType: "stream"
+  });
+
+  return new Promise((resolve, reject) => {
+    const writer = fs.createWriteStream(filePath);
+    response.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+}
+
 const createDyteMeeting = async (title) => {
   try {
     const response = await axios.post(`${DYTE_API_URL}/meetings`, {
@@ -248,18 +267,31 @@ export const joinBatchClass = async (req, res) => {
 
     const isStartedToday = lastStart && lastStart.isSame(today, 'day');
 
-    if (!batch.dyte_meeting_id || batch.meeting_platform !== 'Dyte' || !isStartedToday) {
+    // Base check: Meeting ID must exist
+    if (!batch.dyte_meeting_id || batch.meeting_platform !== 'Dyte') {
+      return res.status(400).json({ success: false, message: "Class has not been initialized." });
+    }
+
+    // Strict Schedule: Enforce that instructor started it TODAY
+    // Verify User Role
+    // Verify User Role (Case insensitive)
+    const userRole = (req.user.role || '').toLowerCase();
+    const isHost = ['tenant', 'instructor', 'admin', 'superadmin'].includes(userRole);
+
+    // Strict Schedule: Enforce that instructor started it TODAY
+    // Non-hosts (Students, etc) cannot start the meeting. They must wait for Host.
+    if (!isHost && !isStartedToday) {
       return res.status(400).json({ success: false, message: "Class has not been started by the instructor yet." });
     }
 
     // Add User as Participant
     const name = await getUserName(userId);
-    const userRole = req.user.role; // Assuming role is available in req.user from authMiddleware
+    // const userRole = req.user.role; // Moved up
 
     // Determine role/preset. 
     // Admin (tenant) and Instructor should have host options.
     let preset = 'group_call_participant';
-    if (userRole === 'tenant' || userRole === 'instructor') {
+    if (isHost) {
       preset = 'group_call_host';
     }
 
@@ -507,11 +539,92 @@ export const uploadManualRecording = async (req, res) => {
 
 export const handleDyteWebhook = async (req, res) => {
   try {
-    // req.body is a buffer because of express.raw in routes
     const payload = JSON.parse(req.body.toString());
     const { event, data } = payload;
 
-    console.log(`Received Dyte Webhook: ${event}`);
+    console.log("📩 Dyte Webhook Event:", event);
+
+    // 💰 FINANCE: Track Meeting Hours (Source of Truth)
+    if (event === 'meeting.ended') {
+      console.log(`[Dyte Webhook] Meeting Ended: ${data.id}`);
+
+      const meetingId = data.id;
+      const startedAt = new Date(data.live_started_at || data.created_at);
+      const endedAt = new Date(data.live_ended_at || new Date());
+
+      // Calculate duration in seconds
+      const durationSeconds = Math.round((endedAt - startedAt) / 1000);
+      const durationMinutes = parseFloat((durationSeconds / 60).toFixed(2));
+
+      // Find the associated Batch
+      const batch = await Batch.findOne({ dyte_meeting_id: meetingId });
+
+      if (batch) {
+        // Upsert LiveSession
+        // We look for an ongoing session or create a new completed one
+        const filter = { dyte_meeting_id: meetingId };
+
+        const updateDoc = {
+          dyte_meeting_id: meetingId,
+          batch_id: batch._id,
+          tenant_id: batch.tenant_id,
+          instructor_id: batch.instructor_id, // Default to batch instructor
+          actual_start_time: startedAt,
+          actual_end_time: endedAt,
+          duration_seconds: durationSeconds,
+          duration_minutes: durationMinutes,
+          status: 'completed',
+          topic: batch.batch_name + " (Auto-Logged)",
+          agenda: "Class Session",
+          // Required fields for schema validation if creating new
+          scheduled_start_time: moment(startedAt).format("YYYY-MM-DD HH:mm"),
+          scheduled_end_time: moment(endedAt).format("YYYY-MM-DD HH:mm"),
+          host_url: "https://app.dyte.io", // Placeholder
+          join_url: batch.meeting_link || "https://app.dyte.io",
+          meeting_duration_completed: durationMinutes + " mins",
+          meeting_participants_count: data.participants_count || 0
+        };
+
+        // If batch has multiple instructors, we might default to the main one or leave null
+        if (!updateDoc.instructor_id && batch.instructor_ids && batch.instructor_ids.length > 0) {
+          updateDoc.instructor_id = batch.instructor_ids[0];
+        }
+
+        const options = { upsert: true, new: true, setDefaultsOnInsert: true };
+
+        await LiveSession.findOneAndUpdate(filter, updateDoc, options);
+        console.log(`[Finance] Logged ${durationMinutes} mins for Batch ${batch.batch_name}, Instructor: ${updateDoc.instructor_id}`);
+      } else {
+        console.warn(`[Finance] Meeting ${meetingId} ended but no Batch found.`);
+      }
+    }
+
+    // Only handle recording ready
+    if (event === "recording.ready") {
+      const meetingId = data.meeting_id;
+      const recordingUrl = data.recording_url;
+
+      if (!meetingId || !recordingUrl) {
+        // return res.status(400).send("Invalid data");
+        console.log("Invalid data in recording.ready event");
+      } else {
+
+        // 📁 Create folder if not exists (HOSTED SYSTEM ONLY)
+        if (!fs.existsSync(BASE_FOLDER)) {
+          fs.mkdirSync(BASE_FOLDER, { recursive: true });
+        }
+
+        const filePath = path.join(
+          BASE_FOLDER,
+          `meeting_${meetingId}.mp4`
+        );
+
+        console.log("⬇ Downloading recording...");
+        await downloadVideo(recordingUrl, filePath);
+
+        console.log("✅ Recording saved to HOST SYSTEM:", filePath);
+      }
+    }
 
     if (event === 'recording.status.update' && data.status === 'COMPLETED') {
       const { meeting_id, download_url, id: recording_id } = data;

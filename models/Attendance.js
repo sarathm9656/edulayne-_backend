@@ -27,7 +27,7 @@ const attendanceSchema = new mongoose.Schema({
   },
   batch_id: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Batch_table',
+    ref: 'Batch',
     required: true
   },
   date: {

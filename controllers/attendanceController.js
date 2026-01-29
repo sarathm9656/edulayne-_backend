@@ -5,12 +5,16 @@ import Batch from '../models/Batch_table.js';
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Calculate attendance status based on duration and late rules
 const calculateAttendanceStatus = (totalDurationSeconds, classStartTime, firstJoinTime) => {
   const MIN_PRESENT_DURATION = 10 * 60; // 10 minutes in seconds
   const LATE_JOIN_THRESHOLD = 5 * 60; // 5 minutes in seconds
-  
+
   // Check if joined late
   if (firstJoinTime) {
     const timeDiff = Math.abs(firstJoinTime - classStartTime);
@@ -22,7 +26,7 @@ const calculateAttendanceStatus = (totalDurationSeconds, classStartTime, firstJo
       }
     }
   }
-  
+
   // Check if stayed enough time
   if (totalDurationSeconds >= MIN_PRESENT_DURATION) {
     return 'present';
@@ -35,7 +39,7 @@ const calculateAttendanceStatus = (totalDurationSeconds, classStartTime, firstJo
 const handleStudentJoin = async (req, res) => {
   try {
     const { student_id, course_id, batch_id, class_start_time } = req.body;
-    
+
     // Validate required fields
     if (!student_id || !course_id || !batch_id || !class_start_time) {
       return res.status(400).json({
@@ -72,7 +76,7 @@ const handleStudentJoin = async (req, res) => {
     // Find or create attendance record for today
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of day
-    
+
     let attendance = await Attendance.findOne({
       student_id,
       course_id,
@@ -92,7 +96,7 @@ const handleStudentJoin = async (req, res) => {
         course_id,
         batch_id,
         date: new Date(),
-        marked_by: req.user._id, // Assuming user info comes from middleware
+        marked_by: req.user.user_id || req.user._id, // Use Profile ID if available
         class_start_time: new Date(class_start_time),
         sessions: [{
           join_time: joinTime,
@@ -130,7 +134,7 @@ const handleStudentJoin = async (req, res) => {
 const handleStudentLeave = async (req, res) => {
   try {
     const { student_id, course_id, batch_id } = req.body;
-    
+
     if (!student_id || !course_id || !batch_id) {
       return res.status(400).json({
         success: false,
@@ -139,11 +143,11 @@ const handleStudentLeave = async (req, res) => {
     }
 
     const leaveTime = new Date();
-    
+
     // Find today's attendance record
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const attendance = await Attendance.findOne({
       student_id,
       course_id,
@@ -163,7 +167,7 @@ const handleStudentLeave = async (req, res) => {
 
     // Find the active session (without leave_time)
     const activeSession = attendance.sessions.find(session => !session.leave_time);
-    
+
     if (!activeSession) {
       return res.status(400).json({
         success: false,
@@ -173,25 +177,25 @@ const handleStudentLeave = async (req, res) => {
 
     // Update the session with leave time
     activeSession.leave_time = leaveTime;
-    
+
     // Calculate duration for this session
     const durationMs = leaveTime.getTime() - activeSession.join_time.getTime();
     activeSession.duration_seconds = Math.floor(durationMs / 1000);
-    
+
     // Calculate total duration across all sessions
     const totalDuration = attendance.sessions.reduce((total, session) => {
       return total + (session.duration_seconds || 0);
     }, 0);
-    
+
     attendance.total_duration_seconds = totalDuration;
-    
+
     // Calculate attendance status
-    const firstJoinTime = attendance.sessions.length > 0 ? 
+    const firstJoinTime = attendance.sessions.length > 0 ?
       attendance.sessions[0].join_time : null;
-      
+
     attendance.status = calculateAttendanceStatus(
-      totalDuration, 
-      attendance.class_start_time, 
+      totalDuration,
+      attendance.class_start_time,
       firstJoinTime
     );
 
@@ -216,41 +220,41 @@ const handleStudentLeave = async (req, res) => {
 const getDailyAttendance = async (req, res) => {
   try {
     const { date, batch_id, course_id } = req.query;
-    
+
     let queryDate = new Date();
     if (date) {
       queryDate = new Date(date);
     }
-    
+
     // Normalize to start of day
     queryDate.setHours(0, 0, 0, 0);
-    
+
     let query = {
       date: {
         $gte: queryDate,
         $lt: new Date(queryDate.getTime() + 24 * 60 * 60 * 1000)
       }
     };
-    
+
     if (batch_id) {
       query.batch_id = batch_id;
     }
-    
+
     if (course_id) {
       query.course_id = course_id;
     }
-    
+
     const attendanceRecords = await Attendance.find(query)
       .populate('student_id', 'fname lname email')
       .populate('course_id', 'course_title')
       .populate('batch_id', 'batch_name')
       .populate('marked_by', 'fname lname email');
-    
+
     // Calculate statistics
     const presentCount = attendanceRecords.filter(record => record.status === 'present').length;
     const lateCount = attendanceRecords.filter(record => record.status === 'late').length;
     const absentCount = attendanceRecords.filter(record => record.status === 'absent').length;
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -260,8 +264,8 @@ const getDailyAttendance = async (req, res) => {
           present: presentCount,
           late: lateCount,
           absent: absentCount,
-          attendance_rate: attendanceRecords.length > 0 
-            ? ((presentCount + lateCount) / attendanceRecords.length) * 100 
+          attendance_rate: attendanceRecords.length > 0
+            ? ((presentCount + lateCount) / attendanceRecords.length) * 100
             : 0
         }
       }
@@ -374,6 +378,7 @@ const getMonthlyAttendance = async (req, res) => {
       // Group by student
       const groupedByStudent = {};
       attendanceRecords.forEach(record => {
+        if (!record.student_id) return; // Skip if student not found or population failed
         const studentId = record.student_id._id.toString();
 
         if (!groupedByStudent[studentId]) {
@@ -407,14 +412,15 @@ const getMonthlyAttendance = async (req, res) => {
       });
 
       // Calculate overall summary
+      // Calculate overall summary
       const allStudents = Object.values(groupedByStudent);
-      const totalClasses = allStudents.reduce((sum, student) => sum.summary.total_classes, 0);
-      const totalAttended = allStudents.reduce((sum, student) => sum.summary.attended, 0);
-      const totalPresent = allStudents.reduce((sum, student) => sum.summary.present, 0);
-      const totalLate = allStudents.reduce((sum, student) => sum.summary.late, 0);
-      const totalAbsent = allStudents.reduce((sum, student) => sum.summary.absent, 0);
+      const totalClasses = allStudents.reduce((sum, student) => sum + student.summary.total_classes, 0);
+      const totalAttended = allStudents.reduce((sum, student) => sum + student.summary.attended, 0);
+      const totalPresent = allStudents.reduce((sum, student) => sum + student.summary.present, 0);
+      const totalLate = allStudents.reduce((sum, student) => sum + student.summary.late, 0);
+      const totalAbsent = allStudents.reduce((sum, student) => sum + student.summary.absent, 0);
       const avgAttendance = allStudents.length > 0
-        ? (allStudents.reduce((sum, student) => sum.summary.attendance_percentage, 0) / allStudents.length)
+        ? (allStudents.reduce((sum, student) => sum + student.summary.attendance_percentage, 0) / allStudents.length)
         : 0;
 
       res.status(200).json({
@@ -447,46 +453,47 @@ const getMonthlyAttendance = async (req, res) => {
 const getAttendanceByCourseAndBatch = async (req, res) => {
   try {
     const { course_id, batch_id, start_date, end_date } = req.query;
-    
+
     if (!course_id || !batch_id) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: course_id, batch_id'
       });
     }
-    
+
     let query = {
       course_id,
       batch_id
     };
-    
+
     if (start_date && end_date) {
       query.date = {
         $gte: new Date(start_date),
         $lte: new Date(end_date)
       };
     }
-    
+
     const attendanceRecords = await Attendance.find(query)
       .populate('student_id', 'fname lname email user_code')
       .populate('course_id', 'course_title')
       .populate('batch_id', 'batch_name');
-    
+
     // Group by student
     const groupedByStudent = {};
     attendanceRecords.forEach(record => {
+      if (!record.student_id) return;
       const studentId = record.student_id._id.toString();
-      
+
       if (!groupedByStudent[studentId]) {
         groupedByStudent[studentId] = {
           student: record.student_id,
           records: []
         };
       }
-      
+
       groupedByStudent[studentId].records.push(record);
     });
-    
+
     // Calculate statistics for each student
     Object.keys(groupedByStudent).forEach(studentId => {
       const records = groupedByStudent[studentId].records;
@@ -494,19 +501,19 @@ const getAttendanceByCourseAndBatch = async (req, res) => {
       const lateCount = records.filter(r => r.status === 'late').length;
       const absentCount = records.filter(r => r.status === 'absent').length;
       const totalCount = records.length;
-      
+
       groupedByStudent[studentId].summary = {
         total_classes: totalCount,
         attended: presentCount + lateCount,
         present: presentCount,
         late: lateCount,
         absent: absentCount,
-        attendance_percentage: totalCount > 0 
-          ? parseFloat(((presentCount + lateCount) / totalCount * 100).toFixed(2)) 
+        attendance_percentage: totalCount > 0
+          ? parseFloat(((presentCount + lateCount) / totalCount * 100).toFixed(2))
           : 0
       };
     });
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -551,10 +558,10 @@ const generateDailyAttendancePDF = async (req, res) => {
         $lt: endDate
       }
     })
-    .populate('student_id', 'fname lname email')
-    .populate('course_id', 'course_title')
-    .populate('batch_id', 'batch_name')
-    .populate('marked_by', 'fname lname');
+      .populate('student_id', 'fname lname email')
+      .populate('course_id', 'course_title')
+      .populate('batch_id', 'batch_name')
+      .populate('marked_by', 'fname lname');
 
     if (!attendanceRecords || attendanceRecords.length === 0) {
       return res.status(404).json({
@@ -618,29 +625,29 @@ const generateDailyAttendancePDF = async (req, res) => {
       // Student name
       doc.rect(currentX, currentY, colWidths[0], rowHeight).stroke();
       doc.text(`${record.student_id.fname} ${record.student_id.lname}`,
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[0] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[0] - 2 * cellPadding });
       currentX += colWidths[0];
 
       // Status
       doc.rect(currentX, currentY, colWidths[1], rowHeight).stroke();
       doc.text(record.status.charAt(0).toUpperCase() + record.status.slice(1),
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[1] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[1] - 2 * cellPadding });
       currentX += colWidths[1];
 
       // Duration
       doc.rect(currentX, currentY, colWidths[2], rowHeight).stroke();
       doc.text(Math.round(record.total_duration_seconds / 60) + ' min',
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[2] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[2] - 2 * cellPadding });
       currentX += colWidths[2];
 
       // Remarks
       doc.rect(currentX, currentY, colWidths[3], rowHeight).stroke();
       doc.text(record.remarks || '-',
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[3] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[3] - 2 * cellPadding });
 
       currentY += rowHeight;
 
@@ -705,9 +712,9 @@ const generateMonthlyAttendancePDF = async (req, res) => {
         $lte: endDate
       }
     })
-    .populate('student_id', 'fname lname email user_code')
-    .populate('course_id', 'course_title')
-    .populate('batch_id', 'batch_name');
+      .populate('student_id', 'fname lname email user_code')
+      .populate('course_id', 'course_title')
+      .populate('batch_id', 'batch_name');
 
     if (!attendanceRecords || attendanceRecords.length === 0) {
       return res.status(404).json({
@@ -806,29 +813,29 @@ const generateMonthlyAttendancePDF = async (req, res) => {
       // Student name
       doc.rect(currentX, currentY, colWidths[0], rowHeight).stroke();
       doc.text(`${student.student.fname} ${student.student.lname}`,
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[0] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[0] - 2 * cellPadding });
       currentX += colWidths[0];
 
       // Total classes
       doc.rect(currentX, currentY, colWidths[1], rowHeight).stroke();
       doc.text(student.summary.total_classes.toString(),
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[1] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[1] - 2 * cellPadding });
       currentX += colWidths[1];
 
       // Classes attended
       doc.rect(currentX, currentY, colWidths[2], rowHeight).stroke();
       doc.text(student.summary.attended.toString(),
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[2] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[2] - 2 * cellPadding });
       currentX += colWidths[2];
 
       // Attendance %
       doc.rect(currentX, currentY, colWidths[3], rowHeight).stroke();
       doc.text(student.summary.attendance_percentage + '%',
-               currentX + cellPadding, currentY + (rowHeight - 12) / 2,
-               { width: colWidths[3] - 2 * cellPadding });
+        currentX + cellPadding, currentY + (rowHeight - 12) / 2,
+        { width: colWidths[3] - 2 * cellPadding });
 
       currentY += rowHeight;
 
